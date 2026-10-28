@@ -1,0 +1,63 @@
+[
+  {
+    "id": "c0a26110-8108-4904-892e-cd5018745b92",
+    "kind": "scan",
+    "at": 1793163503580,
+    "mode": "custom",
+    "categories": [
+      "user-temp"
+    ],
+    "estimatedBytes": 0,
+    "actualBytes": 0,
+    "verifiedBytesFreed": null,
+    "scannedFiles": 144,
+    "deletedFiles": 0,
+    "skippedFiles": 144,
+    "errors": [
+      "Access denied: /tmp/systemd-private-26c3571e02ae45729a6b5dcdc30b918d-systemd-logind.service-6Ux4wQ",
+      "Access denied: /var/tmp/systemd-private-26c3571e02ae45729a6b5dcdc30b918d-systemd-logind.service-Pe4nkQ"
+    ],
+    "cancelled": false,
+    "durationMs": 57,
+    "diskBefore": {
+      "mount": "/",
+      "totalBytes": 26168356864,
+      "freeBytes": 20224827392,
+      "usedBytes": 5943529472,
+      "usedPercent": 22.712658279957033
+    },
+    "diskAfter": null,
+    "summary": "Scan (custom): 0 eligible files, 0 bytes"
+  },
+  {
+    "id": "4993d54c-a797-48ec-8684-a33ba51a6b05",
+    "kind": "clean",
+    "at": 1793163504433,
+    "mode": "custom",
+    "categories": [],
+    "estimatedBytes": 0,
+    "actualBytes": 0,
+    "verifiedBytesFreed": 0,
+    "scannedFiles": 0,
+    "deletedFiles": 0,
+    "skippedFiles": 0,
+    "errors": [],
+    "cancelled": false,
+    "durationMs": 0,
+    "diskBefore": {
+      "mount": "/",
+      "totalBytes": 26168356864,
+      "freeBytes": 20224823296,
+      "usedBytes": 5943533568,
+      "usedPercent": 22.712673932449164
+    },
+    "diskAfter": {
+      "mount": "/",
+      "totalBytes": 26168356864,
+      "freeBytes": 20224823296,
+      "usedBytes": 5943533568,
+      "usedPercent": 22.712673932449164
+    },
+    "summary": "Cleanup (custom): 0 files, 0 bytes"
+  }
+]

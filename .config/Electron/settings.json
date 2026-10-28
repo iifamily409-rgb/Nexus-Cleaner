@@ -1,0 +1,34 @@
+{
+  "theme": "dark",
+  "accent": "cyan",
+  "animationIntensity": "full",
+  "reducedMotion": false,
+  "refreshIntervalMs": 2000,
+  "defaultMode": "smart",
+  "enabledCategories": [
+    "user-temp",
+    "windows-temp",
+    "app-caches",
+    "browser-cache",
+    "thumbnails",
+    "crash-dumps",
+    "error-reports"
+  ],
+  "exclusions": [],
+  "maxAgeHours": 24,
+  "historyRetentionDays": 90,
+  "confirmDestructive": true,
+  "schedule": {
+    "enabled": false,
+    "mode": "quick",
+    "categories": [
+      "user-temp",
+      "thumbnails"
+    ],
+    "frequency": "weekly",
+    "hour": 3,
+    "minute": 0,
+    "notify": true,
+    "maxAgeHours": 24
+  }
+}

@@ -1,0 +1,34 @@
+appId: com.nexus.cleaner
+productName: NEXUS Cleaner
+copyright: Copyright © 2026 Nexus Cleaner Project
+directories:
+  buildResources: resources
+  output: release
+files:
+  - out/**/*
+  - package.json
+  - '!**/*.map'
+asar: true
+# `normal` keeps the 7z step within modest CI memory limits; `maximum`
+# needs >2 GB RAM for a payload this size.
+compression: store
+win:
+  target:
+    - target: nsis
+      arch: [x64]
+    - target: portable
+      arch: [x64]
+  icon: resources/icon.ico
+  artifactName: ${productName}-${version}-${arch}.${ext}
+  requestedExecutionLevel: asInvoker
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: NEXUS Cleaner
+  deleteAppDataOnUninstall: false
+portable:
+  artifactName: ${productName}-${version}-portable.${ext}
+publish: null

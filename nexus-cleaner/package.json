@@ -1,0 +1,50 @@
+{
+  "name": "nexus-cleaner",
+  "version": "1.0.0",
+  "description": "NEXUS CLEANER — safe, fast Windows 11 PC maintenance and optimization suite",
+  "main": "./out/main/index.js",
+  "author": "Nexus Cleaner Project",
+  "license": "MIT",
+  "private": true,
+  "scripts": {
+    "dev": "electron-vite dev",
+    "start": "electron-vite preview",
+    "build": "npm run typecheck && electron-vite build",
+    "typecheck:node": "tsc -p tsconfig.node.json --noEmit",
+    "typecheck:web": "tsc -p tsconfig.web.json --noEmit",
+    "typecheck": "npm run typecheck:node && npm run typecheck:web",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:node": "vitest run --project node",
+    "test:ui": "vitest run --project ui",
+    "icons": "python3 scripts/gen-icon.py",
+    "dist:win": "npm run build && electron-builder --win nsis portable --config electron-builder.yml",
+    "dist:win:portable": "npm run build && electron-builder --win portable --config electron-builder.yml",
+    "dist:win:dir": "npm run build && electron-builder --win dir --config electron-builder.yml"
+  },
+  "dependencies": {
+    "framer-motion": "12.43.0",
+    "lucide-react": "1.62.0",
+    "react": "19.3.1",
+    "react-dom": "19.3.1",
+    "zod": "4.6.7"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "4.3.3",
+    "@testing-library/dom": "10.4.1",
+    "@testing-library/react": "16.3.3",
+    "@testing-library/user-event": "14.6.1",
+    "@types/node": "22.18.9",
+    "@types/react": "19.2.2",
+    "@types/react-dom": "19.2.1",
+    "@vitejs/plugin-react": "5.2.0",
+    "electron": "38.8.6",
+    "electron-builder": "26.18.0",
+    "electron-vite": "6.0.0",
+    "jsdom": "26.1.0",
+    "tailwindcss": "4.3.3",
+    "typescript": "5.9.3",
+    "vite": "7.3.7",
+    "vitest": "3.2.7"
+  }
+}
