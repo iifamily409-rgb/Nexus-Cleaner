@@ -13,25 +13,14 @@ import type {
   ScanReport
 } from '@shared/types'
 import { api, isDesktop } from '../lib/api'
+import { isPageId, type PageId } from '../lib/navigation'
 
-export type PageId =
-  | 'dashboard'
-  | 'quick'
-  | 'smart'
-  | 'deep'
-  | 'storage'
-  | 'duplicates'
-  | 'startup'
-  | 'browser'
-  | 'monitor'
-  | 'network'
-  | 'software'
-  | 'scheduler'
-  | 'history'
-  | 'settings'
+export type { PageId }
 
 export interface ClearSession {
   phase: 'idle' | 'scanning' | 'ready' | 'cleaning' | 'verifying' | 'done' | 'error'
+  /** Which scan mode started this session (used for labels only). */
+  mode: ScanOptions['mode'] | null
   scan: ScanReport | null
   report: CleanReport | null
   error: string | null
@@ -84,9 +73,9 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
   const [metricsHistory, setMetricsHistory] = useState<MetricsSnapshot[]>([])
   const [progress, setProgress] = useState<LiveProgress | null>(null)
   const [events, setEvents] = useState<OperationEvent[]>([])
-  const [page, setPage] = useState<PageId>('dashboard')
+  const [page, setPage] = useState<PageId>('home')
   const [history, setHistory] = useState<HistoryRecord[]>([])
-  const [session, setSession] = useState<ClearSession>({ phase: 'idle', scan: null, report: null, error: null })
+  const [session, setSession] = useState<ClearSession>({ phase: 'idle', mode: null, scan: null, report: null, error: null })
   const [toast, setToast] = useState<AppContextValue['toast']>(null)
   const toastTimer = useRef<number | null>(null)
 
@@ -138,23 +127,7 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
     })
     const offProgress = client.events.onProgress((p) => setProgress(p))
     const offNavigate = client.events.onNavigate((target) => {
-      const known: PageId[] = [
-        'dashboard',
-        'quick',
-        'smart',
-        'deep',
-        'storage',
-        'duplicates',
-        'startup',
-        'browser',
-        'monitor',
-        'network',
-        'software',
-        'scheduler',
-        'history',
-        'settings'
-      ]
-      if (known.includes(target as PageId)) setPage(target as PageId)
+      if (isPageId(target)) setPage(target)
     })
     const offEvent = client.events.onEvent((e) =>
       setEvents((prev) => {
@@ -221,15 +194,21 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
 
   const scan = useCallback(
     async (options: ScanOptions): Promise<ScanReport | null> => {
-      setSession({ phase: 'scanning', scan: null, report: null, error: null })
+      setSession({ phase: 'scanning', mode: options.mode, scan: null, report: null, error: null })
       setEvents([])
       try {
         const report = await api().cleaner.scan(options)
-        setSession({ phase: report.cancelled ? 'idle' : 'ready', scan: report, report: null, error: null })
+        setSession({
+          phase: report.cancelled ? 'idle' : 'ready',
+          mode: options.mode,
+          scan: report,
+          report: null,
+          error: null
+        })
         await refreshHistory()
         return report
       } catch (err) {
-        setSession({ phase: 'error', scan: null, report: null, error: (err as Error).message })
+        setSession({ phase: 'error', mode: options.mode, scan: null, report: null, error: (err as Error).message })
         notify(`Scan failed: ${(err as Error).message}`, 'error')
         return null
       }
@@ -266,7 +245,7 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
   }, [progress?.opId, session.scan?.id, notify])
 
   const resetSession = useCallback(() => {
-    setSession({ phase: 'idle', scan: null, report: null, error: null })
+    setSession({ phase: 'idle', mode: null, scan: null, report: null, error: null })
   }, [])
 
   const busy = session.phase === 'scanning' || session.phase === 'cleaning' || session.phase === 'verifying'

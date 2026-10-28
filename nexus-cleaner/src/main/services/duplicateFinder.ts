@@ -213,6 +213,32 @@ export class DuplicateFinder {
   }
 
   /**
+   * Counts the copies of `group` that still exist on disk, excluding `excludePath`.
+   * Verification is by size + content hash, not just existence, so a file that
+   * was replaced with different content does not count as a survivor.
+   */
+  private async countLiveCopies(group: DuplicateGroup, excludePath: string): Promise<number> {
+    let live = 0
+    for (const file of group.files) {
+      if (samePathKey(file.path) === samePathKey(excludePath)) continue
+      try {
+        const st = await fsp.lstat(file.path)
+        if (!st.isFile() || st.isSymbolicLink()) continue
+        if (st.size !== group.size) continue
+        // Verified by full SHA-256, not just by path: a file replaced with
+        // different content must not be counted as a surviving copy.
+        const hash = await this.hashFile(file.path, true, new CancellationToken())
+        if (hash !== group.hash) continue
+        live++
+        if (live >= 1000) break
+      } catch {
+        // Missing or unreadable: not a survivor.
+      }
+    }
+    return live
+  }
+
+  /**
    * Deletes an explicit list of duplicate paths after re-verifying that each
    * path still belongs to a duplicate group that retains another copy.
    */
@@ -225,8 +251,12 @@ export class DuplicateFinder {
       bytesDeleted: 0,
       skipped: 0,
       failed: 0,
+      skipReasons: {},
       errors: [],
       durationMs: 0
+    }
+    const noteSkip = (reason: string): void => {
+      result.skipReasons[reason] = (result.skipReasons[reason] ?? 0) + 1
     }
 
     // Re-verify against the most recent scan when available.
@@ -243,6 +273,19 @@ export class DuplicateFinder {
       for (const group of latest.groups) remainingPerGroup.set(group.hash, group.files.length)
     }
 
+    // Fail closed. Without a scan result there is no evidence that any of these
+    // paths is a duplicate, so nothing may be deleted. Silently deleting them
+    // would turn a duplicate cleanup into an arbitrary file deletion.
+    if (!latest) {
+      for (const rawPath of paths) {
+        result.attempted++
+        result.skipped++
+        noteSkip('no verified duplicate scan — run Duplicate Finder first')
+      }
+      result.durationMs = Date.now() - startedAt
+      return result
+    }
+
     for (const rawPath of paths) {
       if (result.attempted > 5000) {
         result.errors.push('Deletion batch limit reached (5000 paths).')
@@ -253,27 +296,35 @@ export class DuplicateFinder {
 
       if (isCriticalSystemPath(target)) {
         result.skipped++
+        noteSkip('inside a critical system location')
         if (result.errors.length < 25) result.errors.push(`Skipped critical path: ${target}`)
         continue
       }
       if (hasProtectedExtension(path.basename(target)) && groupByPath.size === 0) {
         result.skipped++
+        noteSkip('protected file type outside a verified duplicate group')
         if (result.errors.length < 25) result.errors.push(`Skipped unverified file type: ${target}`)
         continue
       }
 
       const group = groupByPath.get(samePathKey(target))
       if (group) {
-        const remaining = remainingPerGroup.get(group.hash) ?? 0
-        if (remaining <= keepPerGroup) {
+        // The scan-time count is not trustworthy on its own: a copy may have
+        // been moved, deleted or renamed between the scan and this deletion.
+        // Recount what is actually still on disk before removing anything, so a
+        // duplicate cleanup can never delete the last surviving copy.
+        const liveSurvivors = await this.countLiveCopies(group, target)
+        if (liveSurvivors < keepPerGroup) {
           result.skipped++
+          noteSkip('no verified surviving copy — refusing to delete the last copy')
           if (result.errors.length < 25) {
-            result.errors.push(`Preserved ${target}: the group must keep at least ${keepPerGroup} copy/copies`)
+            result.errors.push(`Preserved ${target}: only ${liveSurvivors} cop(ies) would remain, ${keepPerGroup} required`)
           }
           continue
         }
       } else if (groupByPath.size > 0) {
         result.skipped++
+        noteSkip('not part of a verified duplicate group')
         if (result.errors.length < 25) result.errors.push(`Skipped ${target}: not part of a verified duplicate group`)
         continue
       }
@@ -283,10 +334,12 @@ export class DuplicateFinder {
         st = await fsp.lstat(target)
       } catch {
         result.skipped++
+        noteSkip('file disappeared before deletion')
         continue
       }
       if (!st.isFile() || st.isSymbolicLink()) {
         result.skipped++
+        noteSkip('symbolic link or non-regular file')
         if (result.errors.length < 25) result.errors.push(`Skipped non-regular file: ${target}`)
         continue
       }
@@ -295,6 +348,7 @@ export class DuplicateFinder {
         const survivors = group.files.filter((f) => samePathKey(f.path) !== samePathKey(target)).length
         if (survivors < keepPerGroup) {
           result.skipped++
+          noteSkip('no verified surviving copy in a personal folder')
           continue
         }
       }
@@ -308,6 +362,7 @@ export class DuplicateFinder {
         const code = (err as NodeJS.ErrnoException).code
         if (code === 'EACCES' || code === 'EPERM' || code === 'EBUSY') {
           result.skipped++
+          noteSkip('locked or in use by another program')
           if (result.errors.length < 25) result.errors.push(`Locked: ${target}`)
         } else {
           result.failed++

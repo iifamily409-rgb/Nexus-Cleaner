@@ -225,6 +225,8 @@ export class CleanerEngine {
 
     const candidates: Candidate[] = []
     const seen = new Set<string>()
+    /** Paths already counted as eligible, so overlapping roots count once. */
+    const seenEligible = new Set<string>()
     const kind = platformKind()
     const errors = new ErrorBag()
     let totalEligibleBytes = 0
@@ -275,7 +277,19 @@ export class CleanerEngine {
         return result
       }
 
-      for (const root of roots) {
+      // Drop roots that are nested inside another root of the same category: the
+      // outer walk already reaches every file below them.
+      const orderedRoots = [...roots].sort((a, b) => path.resolve(a).length - path.resolve(b).length)
+      const effectiveRoots = orderedRoots.filter(
+        (root, index) =>
+          !orderedRoots.some((other, otherIndex) => {
+            if (otherIndex >= index) return false
+            const rel = path.relative(path.resolve(other), path.resolve(root))
+            return rel !== '' && !rel.startsWith('..') && !path.isAbsolute(rel)
+          })
+      )
+
+      for (const root of effectiveRoots) {
         if (token.isCancelled) break
         const walkStats = await walkDirectory(path.resolve(root), {
           token,
@@ -319,6 +333,13 @@ export class CleanerEngine {
               noteSkip(verdict.reason)
               return
             }
+            // A file reachable from two overlapping roots (e.g. %TEMP% nested
+            // inside %LOCALAPPDATA%\Temp, or /tmp plus a TMPDIR under it) must be
+            // counted exactly once. Counting it twice would inflate the estimate
+            // the user is asked to approve.
+            const dedupeKey = kind === 'win32' ? entry.path.toLowerCase() : entry.path
+            if (seenEligible.has(dedupeKey)) return
+            seenEligible.add(dedupeKey)
             result.eligibleFiles++
             result.eligibleBytes += entry.size
             totalEligibleFiles++
@@ -344,6 +365,8 @@ export class CleanerEngine {
           },
           onSkipLink: () => {
             result.skippedFiles++
+            totalSkipped++
+            noteSkip('symbolic link or reparse point (never followed)')
           }
         })
         if (walkStats.truncated) result.truncated = true
@@ -403,6 +426,7 @@ export class CleanerEngine {
       totalEligibleBytes,
       totalScannedFiles: totalScanned,
       totalSkippedFiles: totalSkipped,
+      skipReasons: aggregateSkipReasons(categoryResults),
       errors: errors.all,
       cancelled: token.isCancelled,
       diskBefore,
@@ -451,6 +475,9 @@ export class CleanerEngine {
     const opId = uid()
     const token = new CancellationToken()
     this.tokens.set(opId, token)
+    // The UI may cancel using either the scan id it already holds or the live
+    // operation id from progress events. Both must stop the same operation.
+    this.tokens.set(scanId, token)
     state.token = token
 
     const startedAt = this.now()
@@ -475,16 +502,21 @@ export class CleanerEngine {
       categoriesDone: [],
       categoriesTotal: state.report.categories.map((c) => c.category)
     }, true)
-    this.emitEvent(opId, 'start', `Cleanup started: ${state.candidates.length} files queued`, 'info', undefined, {
-      candidates: state.candidates.length
-    })
-
     const byCategory = new Map<CategoryId, Candidate[]>()
     for (const candidate of state.candidates) {
       const list = byCategory.get(candidate.category)
       if (list) list.push(candidate)
       else byCategory.set(candidate.category, [candidate])
     }
+
+    // Count what will actually be attempted, grouped exactly as the deletion
+    // loop will group it. Reporting `state.candidates.length` here would be
+    // wrong: that array is drained per category during the run, so the number
+    // shrank as cleanup progressed and under-reported the queue to the user.
+    const queued = [...byCategory.values()].reduce((total, list) => total + list.length, 0)
+    this.emitEvent(opId, 'start', `Cleanup started: ${queued} files queued`, 'info', undefined, {
+      candidates: queued
+    })
 
     const results: DeleteResult[] = []
     const pool = new TaskPool(DELETE_CONCURRENCY)
@@ -506,8 +538,12 @@ export class CleanerEngine {
         bytesDeleted: 0,
         skipped: 0,
         failed: 0,
+        skipReasons: {},
         errors: [],
         durationMs: 0
+      }
+      const noteDeleteSkip = (reason: string): void => {
+        result.skipReasons[reason] = (result.skipReasons[reason] ?? 0) + 1
       }
 
       this.emitProgress(opId, { currentCategory: category, currentTask: `Removing ${category} files` }, true)
@@ -543,6 +579,7 @@ export class CleanerEngine {
             if (!verdict.ok) {
               result.skipped++
               skippedTotal++
+              noteDeleteSkip(verdict.reason)
               if (result.errors.length < 20) result.errors.push(`Skipped ${candidate.path}: ${verdict.reason}`)
               return
             }
@@ -556,6 +593,7 @@ export class CleanerEngine {
                 // Already gone — not an error, not a deletion we performed.
                 result.skipped++
                 skippedTotal++
+                noteDeleteSkip('file disappeared before deletion')
               } else {
                 result.failed++
                 failedTotal++
@@ -570,6 +608,7 @@ export class CleanerEngine {
             if (st.isSymbolicLink() || !st.isFile()) {
               result.skipped++
               skippedTotal++
+              noteDeleteSkip('became a symbolic link or non-regular file after the scan')
               if (result.errors.length < 20) result.errors.push(`Skipped non-regular file: ${candidate.path}`)
               return
             }
@@ -577,6 +616,7 @@ export class CleanerEngine {
             if (minAgeMs > 0 && this.now() - st.mtimeMs < minAgeMs) {
               result.skipped++
               skippedTotal++
+              noteDeleteSkip('timestamps changed — file is now newer than the minimum-age filter')
               return
             }
 
@@ -593,6 +633,7 @@ export class CleanerEngine {
               if (code === 'EACCES' || code === 'EPERM' || code === 'EBUSY' || code === 'ENOTEMPTY') {
                 result.skipped++
                 skippedTotal++
+                noteDeleteSkip('locked or in use by another program')
                 if (result.errors.length < 20) result.errors.push(`Locked or in use: ${candidate.path}`)
               } else {
                 result.failed++
@@ -622,7 +663,16 @@ export class CleanerEngine {
         `${category}: removed ${result.deleted} files (${result.bytesDeleted} bytes), ${result.skipped} skipped, ${result.failed} failed`,
         result.failed > 0 ? 'warn' : 'success',
         category,
-        { deleted: result.deleted, bytesDeleted: result.bytesDeleted, skipped: result.skipped, failed: result.failed }
+        {
+          deleted: result.deleted,
+          bytesDeleted: result.bytesDeleted,
+          skipped: result.skipped,
+          failed: result.failed,
+          skippedReasons: Object.entries(result.skipReasons)
+            .sort((a, b) => b[1] - a[1])
+            .map(([reason, count]) => `${count}× ${reason}`)
+            .join('; ') || 'none'
+        }
       )
       results.push(result)
       this.emitProgress(
@@ -711,6 +761,7 @@ export class CleanerEngine {
 
     this.states.delete(scanId)
     this.tokens.delete(opId)
+    this.tokens.delete(scanId)
     return report
   }
 
@@ -729,6 +780,7 @@ export class CleanerEngine {
       bytesDeleted: 0,
       skipped: 0,
       failed: 0,
+      skipReasons: {},
       errors: [],
       durationMs: c.durationMs
     }))
@@ -813,4 +865,21 @@ export class CleanerEngine {
   discard(scanId: string): void {
     this.states.delete(scanId)
   }
+}
+
+/**
+ * Sums per-category skip reasons into one report-level map.
+ *
+ * The scan and cleanup phases both record a reason for *every* skipped file, so
+ * `totalSkippedFiles` always equals the sum of these counts. Consumers can show
+ * "why files were skipped" without re-walking the categories.
+ */
+export function aggregateSkipReasons(results: { skipReasons?: Record<string, number> }[]): Record<string, number> {
+  const out: Record<string, number> = {}
+  for (const result of results) {
+    for (const [reason, count] of Object.entries(result.skipReasons ?? {})) {
+      out[reason] = (out[reason] ?? 0) + count
+    }
+  }
+  return out
 }

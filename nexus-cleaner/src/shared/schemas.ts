@@ -22,12 +22,16 @@ export const categoryIdSchema = z.enum([
 export const cleanupModeSchema = z.enum(['quick', 'smart', 'deep', 'custom'])
 
 /** Rejects NUL bytes, relative traversal noise and non-absolute paths. */
+/** Drive-letter, UNC or POSIX-rooted path. Anything else is rejected outright. */
+const ABSOLUTE_PATH = /^(?:[a-zA-Z]:[\\/]|\\{2}[^\\/]+[\\/]|\/)/
+
 export const safePathSchema = z
   .string()
   .min(1)
   .max(4096)
   .refine((p) => !p.includes('\0'), { message: 'Path contains NUL byte' })
   .refine((p) => !p.includes('..'), { message: 'Path must not contain ".."' })
+  .refine((p) => ABSOLUTE_PATH.test(p), { message: 'Path must be absolute' })
 
 export const scanOptionsSchema = z.object({
   mode: cleanupModeSchema,

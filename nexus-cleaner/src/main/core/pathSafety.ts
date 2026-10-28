@@ -115,25 +115,20 @@ const CRITICAL_WIN_DIRS = [
   '\\config.msi'
 ]
 
-const CRITICAL_POSIX_DIRS = [
-  '/',
-  '/bin',
-  '/boot',
-  '/dev',
-  '/etc',
-  '/lib',
-  '/lib64',
-  '/proc',
-  '/root',
-  '/sbin',
-  '/sys',
-  '/usr',
-  '/usr/bin',
-  '/usr/lib',
-  '/var/lib',
-  '/var/log',
-  '/var/lib/dpkg',
-  '/home'
+/**
+ * POSIX paths that must never be deleted or scanned.
+ *
+ * EXACT: the directory itself is refused, but children are ordinary user space
+ * (e.g. `/home` itself, not `/home/alice/Downloads`).
+ * SUBTREE: everything below is OS or package-manager state.
+ */
+const CRITICAL_POSIX_EXACT = ['/', '/home', '/usr', '/var', '/srv', '/opt', '/media', '/mnt', '/tmp', '/var/tmp', '/var/lib']
+
+const CRITICAL_POSIX_SUBTREES = [
+  '/bin', '/boot', '/dev', '/etc', '/lib', '/lib64', '/lib32', '/proc', '/root', '/sbin', '/sys',
+  '/usr/bin', '/usr/sbin', '/usr/lib', '/usr/lib32', '/usr/lib64', '/usr/libexec', '/usr/include', '/usr/share',
+  '/var/lib/dpkg', '/var/lib/apt', '/var/lib/rpm', '/var/lib/systemd', '/var/log', '/var/cache/apt',
+  '/snap', '/boot/efi'
 ]
 
 /** Directory names that strongly indicate user data or version control. */
@@ -210,8 +205,8 @@ export function isCriticalSystemPath(p: string, platform: NodeJS.Platform = proc
     const noDrive = n.replace(/^[a-z]:/, '')
     return CRITICAL_WIN_DIRS.some((dir) => noDrive === dir || noDrive.startsWith(dir + '\\'))
   }
-  if (n === '/') return true
-  return CRITICAL_POSIX_DIRS.some((dir) => dir !== '/' && (n === dir || n.startsWith(dir + '/')))
+  if (CRITICAL_POSIX_EXACT.includes(n)) return true
+  return CRITICAL_POSIX_SUBTREES.some((dir) => n === dir || n.startsWith(dir + '/'))
 }
 
 export function isCriticalSegmentName(name: string): boolean {

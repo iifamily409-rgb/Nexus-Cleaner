@@ -1,9 +1,13 @@
 # NEXUS Cleaner — Build & Verification Report
 
 **Version:** 1.0.0
-**Report generated:** during the final verification pass
-**Host used for verification:** Debian 13 (x86-64), Node 20.20.2, npm 10.8.2, Electron 38.8.6 run under Xvfb
-**Target platform:** Windows 11 x64 (installer + portable produced and inspected)
+**Host used for verification:** Debian 13 (x86-64), Node 20.20.2, Electron 38.8.6 under Xvfb
+**Target platform:** Windows 11 x64
+**UI generation:** single Home screen + "All features" drawer (sidebar removed)
+
+> Everything in this report was measured in this workspace during the final
+> pass. Anything that could not be verified here is listed in §7 instead of
+> being claimed.
 
 ---
 
@@ -11,295 +15,259 @@
 
 | Gate | Command | Result |
 | --- | --- | --- |
-| Node-side tests | `npm run test:node` | **117 passed / 0 failed** (unit + integration) |
-| UI tests (jsdom) | `npm run test:ui` | **8 passed / 0 failed** |
-| All tests | `npm test` | **125 passed / 0 failed** (9 files, ~3.6 s) |
-| TypeScript (main/preload/shared/tests) | `npm run typecheck:node` | **clean** (strict, `noUncheckedIndexedAccess`) |
-| TypeScript (renderer/UI tests) | `npm run typecheck:web` | **clean** (strict) |
-| Production build | `npm run build` | **success** — main 154 kB, preload 4.6 kB, renderer 1.17 MB + 49.9 kB CSS |
-| Real Electron boot | Xvfb + production bundle | **window created, no renderer console errors** |
-| Page sweep | all 14 routes | **14/14 render, 0 empty, 0 error screens** |
-| End-to-end cleanup | temp sandbox only | **8 files / 312.5 KB removed, protected files preserved** |
-| Windows packaging | `electron-builder --win nsis portable` | **installer + portable produced** |
+| All tests | `npm test` | **155 passed / 0 failed** (10 files) |
+| Node tests (unit + integration, real temp dirs) | `npm run test:node` | **136 passed** |
+| UI tests (jsdom + Testing Library) | `npm run test:ui` | **19 passed** |
+| TypeScript (main/preload/shared) | `npm run typecheck:node` | **clean** (strict, `noUncheckedIndexedAccess`) |
+| TypeScript (renderer + UI tests) | `npm run typecheck:web` | **clean** (strict) |
+| Production build | `npm run build` | **success** — renderer 1.15 MB JS + 49.7 kB CSS, preload 4.6 kB |
+| Real Electron boot | Xvfb + production bundle | **window created, 0 console errors** |
+| Feature sweep | all 10 drawer entries | **10/10 render, 0 error screens** |
+| End-to-end cleanup | temp sandbox only | **324 queued → 323 removed / 1 skipped**, protected file preserved |
+| Windows unpacked build | `npm run dist:win:dir` | **success** — valid `PE32+ x86-64` executable |
+| Windows installer | `npm run dist:win` | **blocked in this container** (needs Wine; see §6) |
 
 ---
 
-## 2. The two outstanding issues — fixed and regression-tested
+## 2. Navigation redesign
 
-### Issue 1 — Skip reasons were not surfaced
+| Requirement | State |
+| --- | --- |
+| One home screen instead of the Dashboard/Quick/Smart/Deep tabs | ✅ Sidebar and `Dashboard.tsx` deleted; `page` defaults to `home` |
+| Quick Scan → quick mode | ✅ |
+| Smart Scan → smart mode | ✅ |
+| Full Scan → deep mode, "broader analysis, not less-safe" | ✅ copy states it explicitly |
+| Each button runs scan → review → confirmation → clean → results | ✅ asserted in `tests/ui/navigation.test.tsx` and in the live run |
+| All Features keeps every tool reachable | ✅ 10 entries in 4 groups; all still bound to their original page + IPC |
+| No feature page, service, IPC handler or setting removed | ✅ 41 IPC channels, 36 invokes all still registered |
+| Consistent way back home | ✅ logo button + `← Home` + `Ctrl/⌘+H` |
+| No idle/decorative animation before a real scan | ✅ 0 animated nodes in the idle tree (asserted + measured in the live app) |
+| Reduced motion respected | ✅ settings toggle, `animationIntensity: off`, and `prefers-reduced-motion` media query |
 
-**Cause:** the engine counted skipped files but discarded *why* each one was
-skipped, so the UI could only show a bare number.
-
-**Fix:**
-- `CategoryScanResult.skipReasons: Record<string, number>` added to the shared
-  contract (`src/shared/types.ts`).
-- `CleanerEngine` now calls `noteSkip(reason)` at **every** skip site: excluded
-  file name, not a cache/temp type, protected extension, and each distinct
-  `validateDeletionCandidate` refusal (traversal, outside allowlist, exclusion,
-  age filter, protected name, …).
-- UI: each category row gains a **“Why files were skipped”** list with counts;
-  the sample table shows an aggregated **“Skip reasons”** line; a zero-eligible
-  scan now explains itself (age filter / protected types) instead of looking
-  broken.
-
-**Regression tests** — `tests/integration/skipReasons.test.ts` (3 tests):
-- every skipped file is attributed to a reason and
-  `Σ skipReasons === skippedFiles` (no silent drops);
-- skip reasons are empty when nothing was skipped;
-- a skipped file is never counted as eligible or deleted.
-
-Verified in the running app:
-`99 × not a cache/temp file type · 65 × newer than the minimum-age filter · 6 × outside every allowlisted cleanup root`.
-
-### Issue 2 — Validation failures resolved instead of rejecting
-
-**Cause:** the IPC wrapper converted every thrown error into a resolved
-`{ ok: false, error }` value. The renderer therefore could not distinguish a
-rejected/hostile payload from a successful call, and `try/catch` in the UI never
-fired.
-
-**Fix** (`src/main/ipc/register.ts`):
-- handlers now **re-throw** after sanitising, so `ipcRenderer.invoke()` rejects;
-- messages are truncated to 600 characters and never include a stack trace;
-- side-effect: `window.nexus.*` calls behave like normal promises, which is what
-  the UI already assumed.
-
-**Regression tests** — `tests/unit/ipcErrors.test.ts` (10 tests) driving the real
-`registerIpcHandlers` with `electron` mocked:
-- malformed mode, traversal exclusion, unknown category, invalid settings,
-  `/` as storage or duplicate root, unknown scan id, missing confirm title →
-  all **reject**;
-- error message length ≤ 600 and contains no `.ts:` / `at CleanerEngine` frames;
-- valid calls still resolve normally.
-
-Verified in the running app:
-
-```
-badMode        REJECTED: Error invoking remote method 'clean:scan': Error: Rejected by validation…
-traversal      REJECTED: … Rejected by validation…
-badCategory    REJECTED: … Rejected by validation…
-systemRoot     REJECTED: … Refused: critical system location
-dupSystemRoot  REJECTED: … No valid folders to scan.
-badSettings    REJECTED: … Rejected by validation…
-unknownScan    REJECTED: … Unknown or expired scan id. Run a new scan first.
-renderer       window.require/process/ipcRenderer = undefined/undefined/undefined
-```
-
-### Additional defects found and fixed during verification
-
-| # | Defect | Fix |
-| --- | --- | --- |
-| 3 | Header showed “CLEANER 38.8.6” in dev (`app.getVersion()` returns the Electron version when launched from a script) | `resolveAppVersion()` helper + version injected into `AppServices`; now `1.0.0` |
-| 4 | `registerIpcHandlers` imported the Electron entry point (would boot a second app under test) | version passed via the service container instead of an import |
-| 5 | POSIX path rules refused **all** of `/home/*` as critical, so user folders could not be scanned | split into `CRITICAL_POSIX_EXACT` (the directory itself) vs `CRITICAL_POSIX_SUBTREES` (`/etc`, `/usr/bin`, `/var/lib/dpkg`, …) |
-| 6 | Cancelling with the scan id (the id the UI actually holds) did nothing during deletion | the deletion token is now registered under both the operation id and the scan id |
-| 7 | “Clean now” stayed enabled when 0 files were eligible | disabled, with a tooltip pointing at the skip reasons |
-| 8 | `vitest.workspace.ts` was rejected by Vitest 3.2 | replaced with a single `vitest.config.ts` using `test.projects` (`node` + `ui`) |
-| 9 | NSIS packaging failed with “Can’t allocate required memory” on a 2 GB CI box | `compression: store` in `electron-builder.yml` (documented trade-off) |
+`Dashboard.tsx` was **deleted** rather than left orphaned: it was unreachable
+from navigation, and its content duplicated the home screen, which conflicts
+with the "remove duplicate dashboard content" requirement. The one assertion it
+carried (never claims FPS/boost) now lives in the navigation suite.
 
 ---
 
-## 3. End-to-end verification detail (real Electron app)
+## 3. The two outstanding reliability issues
 
-All destructive steps targeted `~/.cache/nexus-e2e` (created for the run) — no
-real user data was touched.
+### Issue 1 — Skip reasons complete, truthful, visible, tested
 
-### 3.1 Scan → preview → clean → results (driven through the UI)
+Every skip site now records a reason. An automated audit walks both the cleaner
+engine and the duplicate finder and asserts that no skip counter is incremented
+without a paired `noteSkip(...)` call — currently **0 unpaired increments**.
+
+Scan phase (`CategoryScanResult.skipReasons`):
+
+`excluded file name` · `not a cache/temp file type` · `protected file type` ·
+each `validateDeletionCandidate` refusal (`outside every allowlisted cleanup
+root`, `matches a user exclusion`, `newer than the minimum-age filter`,
+`inside a personal/document folder`, `inside a critical system location`,
+`protected file type (ext)`, traversal/NUL/not-absolute …) ·
+`symbolic link or reparse point (never followed)`
+
+Cleanup phase (`DeleteResult.skipReasons`, new in this pass):
+
+`file disappeared before deletion` · `became a symbolic link or non-regular file
+after the scan` · `timestamps changed — file is now newer than the minimum-age
+filter` · `locked or in use by another program` · plus every validator reason
+re-checked immediately before `unlink`.
+
+Duplicate finder (`DeleteResult.skipReasons`):
+
+`no verified duplicate scan — run Duplicate Finder first` · `not part of a
+verified duplicate group` · `inside a critical system location` · `protected file
+type outside a verified duplicate group` · `the group must keep at least one
+copy` · `no verified surviving copy — refusing to delete the last copy` ·
+`symbolic link or non-regular file` · `file disappeared before deletion` ·
+`locked or in use by another program`
+
+Invariant: `Σ skipReasons === skipped` in both phases. This is asserted, not
+assumed.
+
+UI: the scan table shows an aggregated "Skip reasons" line, each category row
+expands to its own breakdown, and the cleanup results panel now carries a
+**"Why files were skipped during cleanup"** block that explicitly says
+"No file was skipped — every attempted file was removed and independently
+verified" when the count is zero.
+
+**Regression tests** — `tests/integration/skipReasons.test.ts` (17 tests) using
+throwaway dirs under `os.tmpdir()`:
+
+protected types · age filter · exclusions · symbolic links · allowlist escapes ·
+reconciliation invariant · aggregation helper · vanished file · file swapped for
+a symlink · file rewritten newer than the filter · locked file (`EBUSY`
+injected at the fs layer) · clean delete with empty reasons · duplicate paths ·
+fail-closed with no scan · non-member path.
+
+### Issue 2 — IPC failures reject instead of resolving
+
+`registerIpcHandlers` re-throws after sanitising, so `ipcRenderer.invoke()`
+rejects; messages are truncated to 600 chars and never contain a stack frame.
+`safePathSchema` additionally gained an **absolute-path** check, so relative
+paths are now rejected at the validation boundary rather than further in.
+
+**Regression tests** — `tests/unit/ipcErrors.test.ts` (16 tests) driving the real
+`registerIpcHandlers` against a mocked Electron bus:
+
+- invalid: unknown mode, unknown category, traversal, NUL byte, relative path,
+  empty path, non-string/absent id, malformed settings, negative age, empty
+  duplicate path list → all **reject** via "Rejected by validation";
+- message contains no stack frames and is ≤ 600 chars;
+- valid: `app:info`, `settings:get`, `settings:set`, `clean:scan`, `clean:cancel`
+  → all **resolve**;
+- service failures (scan throws, clean throws, settings write fails, history read
+  fails) → **reject**, and no history record is written for a failed operation.
+
+---
+
+## 4. Defects found and fixed
+
+### This pass
+
+| # | Defect | Impact | Fix |
+| --- | --- | --- | --- |
+| A | `DuplicateFinder.delete()` deleted the **last copy** of a group when the copy intended to survive had vanished after the scan | **Data loss**: a duplicate cleanup could erase every copy of a file | survivors are recounted on disk at deletion time, verifying size **and full SHA-256**; the deletion is refused with a reason when `< keepPerGroup` copies remain |
+| B | `DuplicateFinder.delete()` with **no prior scan** deleted the requested paths outright, and with a non-empty scan it deleted paths that were never in a group | Arbitrary file deletion through the duplicate API | fails closed: without a scan result every path is refused with a reason; unverified paths are refused when a scan exists |
+| C | Cleanup console reported *"N files queued"* using a list that had already been drained per category | Under-reported the approved batch (e.g. showed 4 for 8 eligible) | the queue is counted after grouping, before deletion |
+| D | Overlapping/nested cleanup roots counted the same file (and its bytes) twice | Inflated the estimate the user approves; e.g. 3 files reported as 6 files / 48 KB | nested roots are collapsed per category and eligibility is deduped on canonical path |
+| E | `Dashboard.tsx` orphaned after the redesign | Dead UI duplicating the home screen | removed, along with its now-unused test; its FPS/guarantee assertion was re-added to `tests/ui/navigation.test.tsx` so the guard survives |
+
+### Earlier in this task (retained)
+
+Header version resolution (`resolveAppVersion`) · IPC no longer imports the
+Electron entry point · POSIX `/home/*` over-broad critical-path rule split into
+exact vs subtree lists · cancellation by scan id during deletion ·
+"Clean now" disabled at zero eligible files · `vitest.config.ts` projects ·
+`compression: store` for low-memory packaging.
+
+---
+
+## 5. End-to-end verification (real Electron app, temp dirs only)
+
+Every destructive run used a `mktemp -d` directory with `TMPDIR` pointed at it,
+so the only folder in the deletion allowlist was the scratch dir. No user file
+was ever in scope.
+
+### 5.1 Scan → review → confirm → clean (measured in the live UI)
 
 | Step | Observed |
 | --- | --- |
-| Click **Run Quick Clean** | analysis panel appears; `ELIGIBLE FILES 8`, `ELIGIBLE SIZE 312.5 KB`, `FILES SCANNED 178`, `SKIPPED BY SAFETY RULES 170` |
-| Expand category | `scanned 178 · skipped 173 · errors 2 · took 60 ms` + skip-reason breakdown |
-| Click **Clean now** (OS dialog auto-accepted by the harness only) | results panel: `FILES REMOVED 8`, `BYTES REMOVED (ACTUAL) 312.5 KB`, `DISK FREED (MEASURED) 320.0 KB`, `SKIPPED / FAILED 0 / 0` |
-| Timings | `scan 61 ms · delete 0 ms · verify 0 ms` reported separately |
-| Disk before / after | `18.8 GB → 18.8 GB` (shown as measured, not as a promise) |
-| Files left on disk | `fresh.tmp` (newer than the 24 h filter) and `thesis.docx` (protected type) — **both preserved** |
-| History | new record with `actualBytes: 320000`, `deletedFiles: 8`, `verifiedBytesFreed: 327680` |
+| Click **Quick Scan** | analysis completes against the scratch dir |
+| Review | `Eligible files 4`, `Eligible size 32.0 KB`, `Files seen 159` |
+| One candidate deleted behind the app's back, then **Clean now** + OS confirm accepted | `Files removed 3` · `Bytes removed (actual) 24.0 KB` · `Disk freed (measured) 0 B` · `Skipped / failed 1 / 0` |
+| Skip reasons block | `1 × file disappeared before deletion` |
+| Console | `Cleanup started: 4 files queued` → `removed 3 files … 1 skipped, 0 failed` → `Verified samples: 3/3` |
+| Filesystem afterwards | `thesis.docx` (protected type) survived; scratch dir emptied |
 
-### 3.2 Cancellation
+`4 queued = 3 removed + 1 skipped` reconciles exactly, which is the property
+defect C used to break.
 
-- Cancel via the **scan id** during deletion: `accepted: true`,
-  `cancelled: true`, `deleted 228 == Σ per-category deleted` (no over-reporting).
-- Cancel with an unknown id: returns `false` (no state corruption).
+### 5.2 Larger run
 
-### 3.3 Locked files
+324 queued → 323 removed (11.6 MB reported, 12.2 MB measured) + 1 skipped with a
+stated reason; 18 emptied directories pruned; protected file preserved.
 
-`tests/integration/cancellation.test.ts` makes a parent directory read-only so
-`unlink` fails; the run reports the file as skipped and `totalBytesDeleted`
-excludes it. When the suite runs as **root** (as in this sandbox) the OS bypasses
-directory permissions, so the test asserts the alternative branch and the
-non-root behaviour is exercised in the UI run, where two files were skipped with
-`Access denied` errors in the console.
+### 5.3 Safety spot-checks
 
-### 3.4 Unsafe-path protection
-
-| Attack | Result |
+| Attempt | Result |
 | --- | --- |
-| `exclusions: ['../../etc']` | rejected by zod (traversal) |
-| `categories: ['root']` | rejected (unknown enum) |
-| `mode: 'nuke'` | rejected (unknown enum) |
-| storage/duplicate root `/` | rejected (`Refused: critical system location` / `No valid folders`) |
-| file swapped for a symlink between scan and delete | skipped; the link target survives (unit test) |
-| path inside `Documents`/`.git`/`node_modules` | refused by the personal-folder rule |
-| `.docx`/`.pdf`/`.jpg`/`.zip`/`.kdbx` inside a temp folder | refused by extension protection |
-
-### 3.5 Page sweep (14 routes)
-
-`dashboard, quick, smart, deep, storage, duplicates, startup, browser, monitor,
-network, software, scheduler, history, settings`
-
-Result: `emptyPages: []`, `anyError: false`, `consoleErrors: []`. Settings
-round-trip through the real IPC bridge persisted (`accent`, `refreshIntervalMs`).
-
-### 3.6 Truthfulness checks performed
-
-- Dry run reported `deleted: 0, bytes: 0` and the files were still present
-  (`dryRunFilesStillThere: 8`).
-- A scan with 0 eligible files showed 0 bytes, disabled “Clean now”, and
-  explained why — no cosmetic success message.
-- Dashboard contains no FPS/boost claims (asserted in `tests/ui/cleanFlow.test.tsx`).
-- Unavailable categories (Windows temp, browser caches, thumbnails on this host)
-  are listed with reasons rather than being silently omitted.
-- History contains only operations that actually ran.
+| `mode: 'nuke'`, unknown category, `../../etc` exclusion, relative path | rejected by validation |
+| file swapped for a symlink between scan and delete | skipped, link target untouched |
+| file rewritten newer than the age filter between scan and delete | skipped |
+| locked file (`EBUSY`) | skipped as `locked or in use by another program`, never forced |
+| duplicate delete with no scan, or with a foreign path | refused with a reason; file survives |
+| duplicate delete when the keeper vanished | refused; the last copy survives |
+| 0 eligible files | "Clean now" disabled with an explanation |
 
 ---
 
-## 4. Windows packaging
+## 6. Windows packaging status
 
-```
-release/NEXUS Cleaner-1.0.0-x64.exe         105 189 245 bytes   NSIS installer
-release/NEXUS Cleaner-1.0.0-portable.exe    369 380 751 bytes   portable single-file
-release/win-unpacked/                       unpacked app directory
-release/win-unpacked/resources/app.asar     28 769 076 bytes    3 658 entries
-```
+| Command | Result |
+| --- | --- |
+| `npm run build` | ✅ |
+| `npm run dist:win:dir` | ✅ `release/win-unpacked/NEXUS Cleaner.exe` — `PE32+ executable for MS Windows 10.00 (GUI), x86-64` |
+| `npm run dist:win` (NSIS + portable) | ⚠️ reached the NSIS step, then failed with `spawn wine ENOENT` (Wine is not installable in this container). The partial stub it left behind was only 755 KB — the x64 payload was never embedded — so **no usable installer was produced** and the partial files were removed. |
 
-Integrity checks:
+The packaging pipeline itself is sound: the app is built, packaged and asar
+integrity-updated (signing is skipped — no certificate). Only the NSIS
+self-extractor step needs Wine, which is not installable in this container.
 
-- both artifacts are valid PE files (`MZ` + `PE\0\0`);
-- the outer NSIS stub is 32-bit (expected — NSIS launchers are i386);
-- the **payload** `win-unpacked/NEXUS Cleaner.exe` is `PE32+ x86-64`
-  (machine `0x8664`), i.e. a genuine 64-bit Windows binary;
-- `package.json` inside the asar reports `version 1.0.0`, `main ./out/main/index.js`;
-- configuration: `requestedExecutionLevel: asInvoker`, per-user NSIS, desktop +
-  start-menu shortcuts, no auto-publish.
+**Not verified:** the installer was never executed on Windows hardware, so
+install/uninstall behaviour, shortcuts and SmartScreen are untested claims.
 
-**Not verified here:** the installers were not *executed* on Windows hardware
-(this environment is Linux; Wine can build but not faithfully run the app).
-Code signing is skipped (no certificate). Build on Windows with
-`npm run dist:win` for a shippable, signed release.
-
----
-
-## 5. Implemented features (verified)
-
-Cleanup categories: user temp, Windows temp, application caches, browser caches,
-thumbnail/icon caches, crash dumps, error-reporting queue, Recycle Bin (Windows
-API), Delivery Optimization (Windows), font cache, diagnostic log artifacts —
-each with mode membership, risk level, exact “what it removes” text and root
-list. Quick / Smart / Deep / Custom modes, age filter, exclusions, dry run,
-cancellation, skip-reason reporting, estimate/actual/verified byte accounting.
-
-Monitoring: CPU, RAM, disk usage + I/O, network rx/tx, uptime, load average,
-battery, process table, startup inventory with risk classification.
-
-Tools: storage analyzer (treemap, drill-down, largest files, category buckets,
-JSON export), duplicate finder (SHA-256 verified, keep-one enforcement),
-startup manager (HKCU/user-folder toggling with confirmation + activity log),
-browser cleaner (detection, running state, cache-only), software inventory,
-disk/volume health, Windows update check, read-only SFC, network diagnostics
-(latency, DNS, adapter, opt-in download throughput), opt-in scheduler, activity
-history with JSON/CSV export, settings with local persistence.
-
-Security: `contextIsolation`, sandboxed renderer, no `nodeIntegration`, strict
-CSP, allowlisted IPC with zod validation, rejecting handlers, navigation
-lockdown, no shell execution surface, no elevation for ordinary cleanup, no
-registry cleaning, no AV/firewall/Windows Update modification.
-
----
-
-## 6. Known limitations
-
-1. Windows-specific features report `unavailable` on non-Windows hosts rather
-   than faking data.
-2. `asInvoker` only: HKLM startup entries, some `%SystemRoot%\Temp` files and
-   `sfc /verifyonly` need elevation; the app reports that instead of escalating.
-3. Locked files are skipped, never forced.
-4. Upload throughput is not measured; download throughput is opt-in.
-5. Disk health needs SMART privileges on Linux.
-6. No per-entry Windows startup “impact score” exists at user level, so none is
-   shown.
-7. Scheduled-run notifications are in-app toasts only.
-8. Builds are unsigned → SmartScreen warning on first run.
-9. Installer compression is `store` for low-memory CI; use `normal`/`maximum`
-   with more RAM for smaller artifacts.
-10. `node_modules` is bundled inside the asar (needed because framer-motion and
-    lucide-react ship ESM that Electron's sandboxed renderer path resolves at
-    runtime); this inflates the payer size but does not affect behaviour.
-
----
-
-## 7. Exact commands
+Produce a shippable, signed installer on Windows:
 
 ```bash
-# development
-npm install
-npm run dev
-
-# quality gates
-npm test                 # 125 tests (node + ui)
-npm run test:node        # 117 tests
-npm run test:ui          # 8 tests
-npm run typecheck
-
-# production bundle
-npm run build
-npm start                # preview the built bundle
-
-# windows packaging (run on Windows for a shippable, signed release)
-npm run dist:win            # installer + portable
-npm run dist:win:portable   # portable only
-npm run dist:win:dir        # unpacked directory
-
-# assets
-npm run icons
+npm ci
+npm run dist:win
 ```
 
-Outputs: `out/` (bundled app) and `release/` (installers).
+Generated artefacts are **not** part of the deliverable (see §8).
 
 ---
 
-## 8. Deliverables audit (final)
+## 7. Limitations
 
-Verified against the actual filesystem after the build — not from memory.
+1. Windows-only categories (Windows temp, Delivery Optimization, Recycle Bin API,
+   font cache) report `unavailable` on this host instead of inventing data.
+2. `asInvoker` only — HKLM startup entries, some `%SystemRoot%\Temp` files and
+   `sfc /verifyonly` need elevation; the app reports that rather than escalating.
+3. Locked files are skipped, never forced.
+4. Upload throughput is not measured; download throughput is opt-in.
+5. Disk-health/SMART readings need privileges on Linux.
+6. No per-entry Windows startup impact score exists at user level, so none is shown.
+7. Scheduled-run notifications are in-app toasts only.
+8. Builds are unsigned → SmartScreen warning on first run.
+9. Installer compression is `store` to stay within low-memory build hosts.
+10. Windows installer execution is unverified (§6).
 
-| # | Relative path | Format | Exact bytes | SHA-256 (first 16) |
-| --- | --- | --- | --- | --- |
-| 1 | `release/NEXUS Cleaner-1.0.0-x64.exe` | PE32 NSIS installer (x86 stub + x64 payload) | 105 189 245 | `f9f55bad4c3520cc` |
-| 2 | `release/NEXUS Cleaner-1.0.0-portable.exe` | PE32 NSIS self-extracting portable | 369 380 751 | `77a9445f92779e77` |
-| 3 | `dist/nexus-cleaner-1.0.0-source.tar.gz` | gzip tar, 114 entries | 2 201 547 | see `sha256sum` |
-| 4 | `README.md` | UTF-8 Markdown, 405 lines | 18 802 | `4e90ab605b45994e` |
-| 5 | `docs/BUILD_REPORT.md` | UTF-8 Markdown, 268+ lines | 13 121 | `fea73803a294ed27` |
+---
 
-Integrity results:
+## 8. Workspace size and generated output
 
-- Both executables are valid PE files (`MZ` at 0, `PE\0\0` at `e_lfanew` = 216).
-  The outer **NSIS stub is 32-bit i386** (`machine 0x014c`) — normal for NSIS
-  launchers — while the **application payload is x86-64** (`app-64.7z`, and the
-  previously-inspected `win-unpacked/NEXUS Cleaner.exe` was `PE32+ 0x8664`).
-- `7za t` on **both** artifacts reports no errors:
-  installer `Files: 10, Size 104 844 217`; portable `Files: 4, Size 369 219 895`.
-- The source archive lists and extracts cleanly and contains `package.json`,
-  `README.md`, `docs/BUILD_REPORT.md`, `src/main/index.ts`,
-  `src/renderer/src/App.tsx` and `electron-builder.yml`.
+The previous pass left large generated artefacts in the working tree. The
+deliverable is the **source tree**, so these are excluded from it:
 
-Housekeeping performed during the audit:
+| Path | Approx. size | Status |
+| --- | --- | --- |
+| `node_modules/` | 607 MB | gitignored, restored with `npm ci` |
+| `release/` | removed | gitignored; reproducible with `npm run dist:win`. Leftovers from the failed packaging run were deleted rather than shipped. |
+| `out/` | 1.4 MB | gitignored, reproducible with `npm run build` |
+| `artifacts/ui-verify/` | removed | now gitignored; regenerated by `scripts/verify-ui.cjs` |
+| `*.tsbuildinfo` | 156 KB | now gitignored |
 
-- `release/win-unpacked/` (352 MB) and `release/builder-debug.yml` were removed.
-  They are reproducible with `npm run dist:win:dir` and pushed the release
-  directory far past the workspace snapshot limit.
-- The source archive did **not** exist before this audit; it was created from the
-  working tree (excluding `node_modules`, `out`, `release`, `dist`, `build`,
-  `*.tsbuildinfo`).
-- `release/NEXUS Cleaner-1.0.0-x64.exe.blockmap` (112 323 bytes) is kept: it is
-  only useful for electron-updater delta updates and is not required to install.
+`screenshots/` (1.5 MB, 10 PNGs) is kept as the evidence referenced by
+`docs/SCREENSHOTS.md`; delete it if the patch must stay minimal.
+
+Final tree size excluding `node_modules`: **4.4 MB**, 99 files.
+
+`.gitignore` was extended with `artifacts/` and `*.tsbuildinfo`.
+
+---
+
+## 9. Exact commands
+
+```bash
+npm ci                  # install pinned dependencies
+npm test                # 155 tests (node + ui)
+npm run test:node       # 136 tests
+npm run test:ui         # 19 tests
+npm run typecheck       # both projects, strict
+npm run build           # production bundle into out/
+npm start               # preview the built bundle
+npm run dist:win        # Windows installer + portable (run on Windows)
+npm run dist:win:dir    # unpacked Windows directory (works on Linux)
+```
+
+Live UI verification (needs an X server):
+
+```bash
+npm run build
+Xvfb :99 -screen 0 1600x1000x24 &
+DISPLAY=:99 ./node_modules/electron/dist/electron --no-sandbox scripts/verify-ui.cjs
+# screenshots + results.json land in artifacts/ui-verify/ (gitignored)
+```

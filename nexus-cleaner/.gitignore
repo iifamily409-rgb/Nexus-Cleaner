@@ -5,3 +5,7 @@ release/
 coverage/
 *.log
 .DS_Store
+# generated UI verification output (screenshots + results.json) — reproducible
+# with `scripts/verify-ui.cjs`; kept out of the deliverable to stay small
+artifacts/
+*.tsbuildinfo

@@ -1,23 +1,22 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { Play, X, ShieldAlert, ChevronDown, ChevronRight, ArrowRight, FileWarning, CheckCircle2 } from 'lucide-react'
 import { useApp, useCategoriesById } from '../hooks/useAppState'
-import { HolographicScanner } from './HolographicScanner'
 import { OperationConsole, LiveMetricsStrip } from './Console'
 import { Badge, Button, EmptyState, InfoHint, Panel, PanelHeader, ProgressBar, Toggle, Tooltip } from './ui'
-import { api, formatBytes, formatDuration, formatRate } from '../lib/api'
-import type { CategoryId, CleanupMode } from '@shared/types'
+import { api, formatBytes, formatDuration } from '../lib/api'
+import type { CategoryId, CleanReport, CleanupMode } from '@shared/types'
 
 const MODE_COPY: Record<
   CleanupMode,
   { title: string; blurb: string; detail: string; action: string }
 > = {
   quick: {
-    title: 'Quick Clean',
+    title: 'Quick Scan',
     blurb: 'Lowest-risk categories only, tuned for speed.',
     detail:
-      'Quick Clean analyses user temp, Windows temp, browser caches and thumbnail caches. Every candidate is re-validated before deletion, and locked files are skipped rather than forced.',
-    action: 'Run Quick Clean'
+      'Quick Scan analyses user temp, Windows temp, browser caches and thumbnail caches. Every candidate is re-validated before deletion, and locked files are skipped rather than forced.',
+    action: 'Run Quick Scan'
   },
   smart: {
     title: 'Smart Scan',
@@ -27,28 +26,38 @@ const MODE_COPY: Record<
     action: 'Run Smart Scan'
   },
   deep: {
-    title: 'Deep Analysis',
-    blurb: 'Broader inspection — deeper checks, same safety rules.',
+    title: 'Full Scan',
+    blurb: 'Broader analysis — deeper checks, same safety rules.',
     detail:
-      'Deep Analysis widens the inspection to Delivery Optimization caches, font caches and rotated diagnostic logs. “Deep” means more thorough analysis, never more reckless deletion.',
-    action: 'Run Deep Analysis'
+      'Full Scan widens the inspection to Delivery Optimization caches, font caches and rotated diagnostic logs. “Full” means broader analysis, never more reckless deletion.',
+    action: 'Run Full Scan'
   },
   custom: {
-    title: 'Custom Clean',
+    title: 'Custom Scan',
     blurb: 'You pick exactly which categories are analysed.',
     detail:
       'Custom Clean uses only the categories you tick below. Exclusions and the file-age filter from Settings still apply.',
-    action: 'Run Custom Clean'
+    action: 'Run Custom Scan'
   }
 }
 
-export function CleanPanel({ mode }: { mode: CleanupMode }): React.JSX.Element {
+export function CleanPanel({
+  mode,
+  autoStart = 0
+}: {
+  mode: CleanupMode
+  /** Monotonic token from a home-screen scan button; each new value starts one scan. */
+  autoStart?: number
+}): React.JSX.Element {
   const app = useApp()
   const byId = useCategoriesById()
   const copy = MODE_COPY[mode]
-  const { settings, categories, session, progress, events, metrics, metricsHistory, meta } = app
+  const { settings, categories, session, progress, events, meta } = app
 
   const [selected, setSelected] = useState<CategoryId[]>([])
+  // Keep the home screen quiet: the long category list is collapsed until a
+  // scan actually produced results, or until the user asks for it.
+  const [showCategories, setShowCategories] = useState(false)
   const [expandedCats, setExpandedCats] = useState<Record<string, boolean>>({})
   const [showSample, setShowSample] = useState(false)
   const [dryRunResult, setDryRunResult] = useState<string | null>(null)
@@ -75,6 +84,17 @@ export function CleanPanel({ mode }: { mode: CleanupMode }): React.JSX.Element {
       dryRun: false
     })
   }
+
+  const startedRef = useRef(0)
+
+  // A scan button on the home screen is a real trigger, not decoration.
+  useEffect(() => {
+    if (autoStart <= 0 || startedRef.current === autoStart) return
+    startedRef.current = autoStart
+    void startScan()
+    // startScan is recreated per render; the token is the only trigger we want.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [autoStart])
 
   const runDryRun = async (): Promise<void> => {
     setRunningDryRun(true)
@@ -113,13 +133,21 @@ export function CleanPanel({ mode }: { mode: CleanupMode }): React.JSX.Element {
     await app.clean()
   }
 
+  const zeroEligible = Boolean(session.scan && !session.scan.cancelled && session.scan.totalEligibleFiles === 0)
+  const busyNow = session.phase === 'scanning' || session.phase === 'cleaning' || session.phase === 'verifying'
+  const cleanDisabledReason = !session.scan
+    ? 'Run a scan first'
+    : session.scan.cancelled
+      ? 'The last scan was cancelled'
+      : zeroEligible
+        ? 'Nothing qualified for deletion under the current rules'
+        : busyNow
+          ? 'An operation is already running'
+          : undefined
+
   const scanning = session.phase === 'scanning'
   const cleaning = session.phase === 'cleaning' || session.phase === 'verifying'
   const busy = scanning || cleaning
-  const active = busy || (progress?.phase !== 'idle' && progress !== null)
-
-  const disk = metrics?.disk ?? null
-
   return (
     <div className="grid gap-3 xl:grid-cols-[minmax(0,1fr)_minmax(0,420px)]">
       {/* ------------------------------------------------- left: controls */}
@@ -131,7 +159,9 @@ export function CleanPanel({ mode }: { mode: CleanupMode }): React.JSX.Element {
             icon={<ShieldAlert size={15} />}
             right={
               <div className="flex items-center gap-2">
-                <Badge tone="accent">{effectiveCategories.length} categories</Badge>
+                <Badge tone="accent">
+                  {effectiveCategories.length} {effectiveCategories.length === 1 ? 'category' : 'categories'}
+                </Badge>
                 <Badge>age ≥ {maxAgeHours}h</Badge>
               </div>
             }
@@ -148,7 +178,11 @@ export function CleanPanel({ mode }: { mode: CleanupMode }): React.JSX.Element {
                 </>
               )}
             </Button>
-            <Button onClick={doClean} disabled={!session.scan || busy || session.scan.cancelled}>
+            <Button
+              onClick={doClean}
+              disabled={!session.scan || busy || session.scan.cancelled || zeroEligible}
+              title={cleanDisabledReason}
+            >
               <ArrowRight size={14} /> Clean now
             </Button>
             <Button onClick={runDryRun} disabled={busy || runningDryRun} title="Analyse and show what would happen, without deleting anything">
@@ -166,6 +200,12 @@ export function CleanPanel({ mode }: { mode: CleanupMode }): React.JSX.Element {
           {dryRunResult && (
             <div className="mx-4 mb-3 rounded-lg border border-[color:var(--nx-accent)]/30 bg-[color:var(--nx-accent)]/8 px-3 py-2 text-[11px] text-[color:var(--nx-text)]">
               {dryRunResult}
+            </div>
+          )}
+          {zeroEligible && (
+            <div className="mx-4 mb-3 rounded-lg border border-emerald-500/30 bg-emerald-500/8 px-3 py-2 text-[11px] leading-relaxed text-emerald-200/90">
+              No file passed the safety checks: every location was empty of files older than {maxAgeHours}h, or candidates were rejected by path,
+              exclusion or lock checks. Cleanup is disabled because there is genuinely nothing to delete.
             </div>
           )}
           {session.error && (
@@ -216,19 +256,34 @@ export function CleanPanel({ mode }: { mode: CleanupMode }): React.JSX.Element {
                 : 'Categories included in this mode. Expand a row to see exactly what it removes.'
             }
             right={
-              mode === 'custom' ? (
-                <div className="flex gap-1">
-                  <Button className="!px-2 !py-1 !text-[11px]" onClick={() => setSelected(categories.filter((c) => c.available).map((c) => c.id))}>
-                    All
-                  </Button>
-                  <Button className="!px-2 !py-1 !text-[11px]" onClick={() => setSelected([])}>
-                    None
-                  </Button>
-                </div>
-              ) : undefined
+              <div className="flex gap-1">
+                {mode === 'custom' && (
+                  <>
+                    <Button className="!px-2 !py-1 !text-[11px]" onClick={() => setSelected(categories.filter((c) => c.available).map((c) => c.id))}>
+                      All
+                    </Button>
+                    <Button className="!px-2 !py-1 !text-[11px]" onClick={() => setSelected([])}>
+                      None
+                    </Button>
+                  </>
+                )}
+                <Button
+                  className="!px-2 !py-1 !text-[11px]"
+                  onClick={() => setShowCategories((v) => !v)}
+                  aria-expanded={showCategories || Boolean(session.scan) || mode === 'custom'}
+                >
+                  {showCategories ? 'Hide' : 'Show'} categories
+                </Button>
+              </div>
             }
           />
-          <div className="divide-y divide-[color:var(--nx-border)]/60">
+          {!(showCategories || session.scan || mode === 'custom') && (
+            <p className="px-4 py-3 text-[11px] leading-relaxed text-[color:var(--nx-text-dim)]">
+              {effectiveCategories.length} {effectiveCategories.length === 1 ? 'category is' : 'categories are'} included in this scan. Expand the list to see
+              what each one removes and which locations are checked.
+            </p>
+          )}
+          <div className={`divide-y divide-[color:var(--nx-border)]/60 ${showCategories || session.scan || mode === 'custom' ? '' : 'hidden'}`}>
             {categories.length === 0 && (
               <EmptyState title="No categories resolved" hint="The cleaner could not resolve any cleanup locations on this system." />
             )}
@@ -352,6 +407,29 @@ export function CleanPanel({ mode }: { mode: CleanupMode }): React.JSX.Element {
                 </div>
               ))}
             </div>
+            <div className="border-b border-[color:var(--nx-border)] px-4 py-3 text-[11px]">
+              <span className="nx-label">Why files were skipped during cleanup</span>
+              {(() => {
+                const reasons = aggregateReportSkips(session.report!)
+                return Object.keys(reasons).length === 0 ? (
+                  <p className="mt-1 text-[color:var(--nx-text-dim)]">
+                    {session.report!.totalSkipped === 0
+                      ? 'No file was skipped — every attempted file was removed and independently verified.'
+                      : 'Reasons were not recorded for this operation (older history record).'}
+                  </p>
+                ) : (
+                  <ul className="mt-1 space-y-0.5 text-[color:var(--nx-text-dim)]">
+                    {Object.entries(reasons)
+                      .sort((a, b) => b[1] - a[1])
+                      .map(([reason, count]) => (
+                        <li key={reason}>
+                          <span className="nx-mono text-[color:var(--nx-text)]">{count.toLocaleString()}</span> × {reason}
+                        </li>
+                      ))}
+                  </ul>
+                )
+              })()}
+            </div>
             <div className="grid gap-3 px-4 py-3 text-[11px] sm:grid-cols-3">
               <div>
                 <span className="nx-label">Timings (measured separately)</span>
@@ -462,46 +540,43 @@ export function CleanPanel({ mode }: { mode: CleanupMode }): React.JSX.Element {
         )}
       </div>
 
-      {/* ------------------------------------------------ right: holo + konsole */}
+      {/* --------------------------------------------------- right: live data */}
       <div className="flex flex-col gap-3">
-        <Panel className="nx-scanlines nx-grid-bg relative overflow-hidden">
-          <div className="h-[320px] w-full">
-            <HolographicScanner
-              progress={progress}
-              reducedMotion={app.reducedMotion}
-              intensity={app.animationIntensity}
-              active={active}
-              diskFree={disk?.freeBytes ?? null}
-              diskTotal={disk?.totalBytes ?? null}
-              accent={app.settings?.accent === 'blue' ? '#3b82f6' : app.settings?.accent === 'green' ? '#2ee6a8' : app.settings?.accent === 'violet' ? '#a78bfa' : '#22e6ff'}
-            />
+        <Panel>
+          <PanelHeader
+            title="This scan"
+            subtitle="Counters below are pushed by the cleaner while it works. They are never simulated."
+            right={
+              progress && progress.phase !== 'idle' ? (
+                <Badge tone={progress.phase === 'delete' ? 'warn' : 'accent'}>{progress.phase}</Badge>
+              ) : (
+                <Badge>idle</Badge>
+              )
+            }
+          />
+          <div className="grid grid-cols-2 gap-px overflow-hidden bg-[color:var(--nx-border)]">
+            {[
+              { label: 'Files seen', value: progress ? progress.itemsScanned.toLocaleString() : '—' },
+              { label: 'Eligible', value: progress ? progress.itemsEligible.toLocaleString() : '—' },
+              { label: 'Eligible size', value: progress ? formatBytes(progress.bytesEligible) : '—' },
+              { label: 'Removed', value: progress ? `${progress.filesDeleted.toLocaleString()} · ${formatBytes(progress.bytesDeleted)}` : '—' }
+            ].map((item) => (
+              <div key={item.label} className="bg-[color:var(--nx-surface-2)] px-3 py-2">
+                <div className="nx-label">{item.label}</div>
+                <div className="nx-mono mt-0.5 text-[13px] font-semibold">{item.value}</div>
+              </div>
+            ))}
           </div>
+          {!progress && (
+            <p className="px-3 py-2 text-[10.5px] leading-relaxed text-[color:var(--nx-text-dim)]">
+              No operation is running. Start one of the three scans on the home screen.
+            </p>
+          )}
         </Panel>
-
-        <div className="grid grid-cols-2 gap-2">
-          {[
-            { label: 'CPU', value: metrics ? `${metrics.cpuPercent.toFixed(1)}%` : '—', percent: metrics?.cpuPercent ?? 0 },
-            { label: 'RAM', value: metrics ? `${metrics.memPercent.toFixed(1)}%` : '—', percent: metrics?.memPercent ?? 0 },
-            { label: 'Disk used', value: disk ? `${disk.usedPercent.toFixed(1)}%` : '—', percent: disk?.usedPercent ?? 0 },
-            { label: 'Net rx', value: metrics ? formatRate(metrics.netRxBytesPerSec) : '—', percent: null }
-          ].map((item) => (
-            <div key={item.label} className="nx-panel px-3 py-2">
-              <div className="nx-label">{item.label}</div>
-              <div className="nx-mono text-[13px] font-semibold">{item.value}</div>
-              {item.percent !== null && (
-                <div className="mt-1 h-0.5 overflow-hidden rounded-full bg-[color:var(--nx-border)]">
-                  <div className="h-full rounded-full" style={{ width: `${Math.min(100, item.percent)}%`, background: 'var(--nx-accent)' }} />
-                </div>
-              )}
-            </div>
-          ))}
-        </div>
 
         <Panel className="min-h-[240px] overflow-hidden">
           <OperationConsole events={events} onClear={app.clearEvents} height="h-52" />
         </Panel>
-
-        {metricsHistory.length > 6 && <MiniSpark metrics={metricsHistory} />}
 
         {!meta?.isWindows && (
           <div className="flex items-start gap-2 rounded-lg border border-amber-500/30 bg-amber-500/8 px-3 py-2 text-[11px] leading-relaxed text-amber-200/90">
@@ -517,36 +592,17 @@ export function CleanPanel({ mode }: { mode: CleanupMode }): React.JSX.Element {
   )
 }
 
-function MiniSpark({ metrics }: { metrics: { at: number; cpuPercent: number; memPercent: number }[] }): React.JSX.Element {
-  const width = 320
-  const height = 48
-  const toPath = (key: 'cpuPercent' | 'memPercent'): string => {
-    if (metrics.length < 2) return ''
-    return metrics
-      .map((m, i) => {
-        const x = (i / (metrics.length - 1)) * width
-        const y = height - (Math.min(100, m[key]) / 100) * height
-        return `${i === 0 ? 'M' : 'L'}${x.toFixed(1)},${y.toFixed(1)}`
-      })
-      .join(' ')
+/**
+ * Sums skip reasons across every category of a cleanup report. The engine
+ * records one reason per skipped file, so the total here always equals
+ * `report.totalSkipped`.
+ */
+export function aggregateReportSkips(report: CleanReport): Record<string, number> {
+  const out: Record<string, number> = {}
+  for (const result of report.results) {
+    for (const [reason, count] of Object.entries(result.skipReasons ?? {})) {
+      out[reason] = (out[reason] ?? 0) + count
+    }
   }
-  return (
-    <Panel className="px-3 py-2">
-      <div className="mb-1 flex items-center justify-between">
-        <span className="nx-label">CPU / RAM (last {metrics.length} samples)</span>
-        <div className="flex gap-3 text-[10px]">
-          <span className="flex items-center gap-1 nx-text-accent">
-            <span className="h-1.5 w-3 rounded" style={{ background: 'var(--nx-accent)' }} /> CPU
-          </span>
-          <span className="flex items-center gap-1 text-emerald-300">
-            <span className="h-1.5 w-3 rounded bg-emerald-400" /> RAM
-          </span>
-        </div>
-      </div>
-      <svg viewBox={`0 0 ${width} ${height}`} className="w-full" preserveAspectRatio="none" style={{ height: 48 }}>
-        <path d={toPath('cpuPercent')} fill="none" stroke="var(--nx-accent)" strokeWidth={1.4} />
-        <path d={toPath('memPercent')} fill="none" stroke="#34d399" strokeWidth={1.4} opacity={0.85} />
-      </svg>
-    </Panel>
-  )
+  return out
 }

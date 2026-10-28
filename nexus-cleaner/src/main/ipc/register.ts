@@ -17,7 +17,6 @@ import {
 import type { AppServices } from '../services/appServices'
 import type { HistoryRecord, LiveProgress, OperationEvent } from '@shared/types'
 import { validateScanRoot } from '../core/pathSafety'
-import { APP_VERSION } from '../index'
 import { DEFAULT_CATEGORIES } from '../services/settingsStore'
 
 /**
@@ -84,7 +83,7 @@ export function registerIpcHandlers(services: AppServices, getWindow: () => Brow
 
   // ---------------------------------------------------------------- app ----
   handle(IPC.APP_INFO, async () => ({
-    version: APP_VERSION,
+    version: services.version,
     electron: process.versions.electron,
     chrome: process.versions.chrome,
     node: process.versions.node,

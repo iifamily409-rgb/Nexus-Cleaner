@@ -91,6 +91,8 @@ export interface ScanReport {
   totalEligibleBytes: number
   totalScannedFiles: number
   totalSkippedFiles: number
+  /** Sum of every category's skip reasons; always equals `totalSkippedFiles`. */
+  skipReasons: Record<string, number>
   errors: string[]
   cancelled: boolean
   diskBefore: DiskUsage | null
@@ -105,6 +107,11 @@ export interface DeleteResult {
   bytesDeleted: number
   skipped: number
   failed: number
+  /**
+   * Why each skipped file was skipped, counted by reason. Every skip recorded
+   * here also increments `skipped`, so the totals always reconcile.
+   */
+  skipReasons: Record<string, number>
   errors: string[]
   durationMs: number
 }

@@ -41,7 +41,7 @@ export function BrowserPage(): React.JSX.Element {
       exclusions: app.settings?.exclusions ?? []
     }
     const scan = await app.scan(options)
-    if (scan) app.setPage('quick')
+    if (scan) app.setPage('home')
   }
 
   return (

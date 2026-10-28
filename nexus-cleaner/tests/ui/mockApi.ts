@@ -31,6 +31,7 @@ export const mockScanReport: ScanReport = {
   totalEligibleBytes: 4096,
   totalScannedFiles: 30,
   totalSkippedFiles: 3,
+  skipReasons: { 'not a cache/temp file type': 2, 'newer than the minimum-age filter': 1 },
   errors: [],
   cancelled: false,
   diskBefore: { mount: 'C:\\', totalBytes: 1000, freeBytes: 400, usedBytes: 600, usedPercent: 60 },
@@ -45,7 +46,17 @@ export const mockCleanReport: CleanReport = {
   startedAt: Date.now(),
   endedAt: Date.now() + 800,
   results: [
-    { category: 'user-temp', attempted: 12, deleted: 11, bytesDeleted: 4096, skipped: 1, failed: 0, errors: [], durationMs: 300 }
+    {
+      category: 'user-temp',
+      attempted: 12,
+      deleted: 11,
+      bytesDeleted: 4096,
+      skipped: 1,
+      failed: 0,
+      skipReasons: { 'locked or in use by another program': 1 },
+      errors: [],
+      durationMs: 300
+    }
   ],
   totalDeleted: 11,
   totalBytesDeleted: 4096,

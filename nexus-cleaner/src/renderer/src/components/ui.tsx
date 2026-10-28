@@ -348,7 +348,7 @@ export function Select<T extends string>({
 export function EmptyState({ title, hint, action }: { title: string; hint: string; action?: React.ReactNode }): React.JSX.Element {
   return (
     <div className="flex flex-col items-center justify-center gap-2 px-6 py-12 text-center">
-      <div className="nx-anim-pulse mb-1 h-10 w-10 rounded-full border border-[color:var(--nx-accent)] opacity-40" />
+      <div className="mb-1 h-10 w-10 rounded-full border border-[color:var(--nx-accent)] opacity-40" />
       <p className="text-sm font-medium text-[color:var(--nx-text)]">{title}</p>
       <p className="max-w-md text-xs leading-relaxed text-[color:var(--nx-text-dim)]">{hint}</p>
       {action && <div className="mt-2">{action}</div>}

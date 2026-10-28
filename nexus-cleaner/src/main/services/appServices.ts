@@ -49,9 +49,11 @@ export class AppServices {
   private metricsTimer: NodeJS.Timeout | null = null
   private metricsInterval = 2000
   private userDataDir: string
+  readonly version: string
 
-  constructor(userDataDir: string) {
+  constructor(userDataDir: string, version = '1.0.0') {
     this.userDataDir = userDataDir
+    this.version = version
     this.settings = new SettingsStore(userDataDir)
     this.history = new HistoryStore(userDataDir)
     this.monitor = new SystemMonitor()

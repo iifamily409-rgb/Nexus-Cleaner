@@ -65,14 +65,14 @@ export function SettingsPage(): React.JSX.Element {
               ]}
             />
           </Field>
-          <Field label="Animation intensity" hint="Decorative elements only. Cleaning animations always reflect real operations, but the ambient field can be toned down.">
+          <Field label="Animation intensity" hint="Controls UI transitions only. Progress indicators always reflect real backend operations; there is no decorative or idle animation to tone down.">
             <Select
               value={settings.animationIntensity}
               onChange={(animationIntensity) => void app.updateSettings({ animationIntensity })}
               options={[
-                { value: 'full', label: 'Full (all ambient effects)' },
-                { value: 'reduced', label: 'Reduced (static HUD)' },
-                { value: 'off', label: 'Off (no ambient motion)' }
+                { value: 'full', label: 'Full (standard transitions)' },
+                { value: 'reduced', label: 'Reduced (minimal transitions)' },
+                { value: 'off', label: 'Off (no transitions)' }
               ]}
             />
           </Field>
@@ -92,7 +92,7 @@ export function SettingsPage(): React.JSX.Element {
         <div className="px-4 pb-3">
           <Toggle
             label="Reduced motion (accessibility)"
-            description="Disables all decorative animation, including the holographic rotation. Real progress indicators remain."
+            description="Removes all UI transitions. Progress bars driven by real operations still update."
             checked={settings.reducedMotion}
             onChange={(reducedMotion) => void app.updateSettings({ reducedMotion })}
           />

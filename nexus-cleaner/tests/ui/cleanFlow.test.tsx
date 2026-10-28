@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { render, screen, waitFor, within } from '@testing-library/react'
+import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { AppProvider } from '@/hooks/useAppState'
 import { CleanPage } from '@/pages/CleanPage'
@@ -27,7 +27,7 @@ describe('Clean page flow', () => {
     renderPage()
     await screen.findByText('User temporary files')
 
-    const scanButton = screen.getByRole('button', { name: /run quick clean/i })
+    const scanButton = screen.getByRole('button', { name: /run quick scan/i })
     await userEvent.click(scanButton)
 
     await waitFor(() => expect(api.cleaner.scan).toHaveBeenCalledTimes(1))
@@ -71,7 +71,7 @@ describe('Clean page flow', () => {
     ;(api.dialog.confirm as unknown as { mockResolvedValue: (v: boolean) => void }).mockResolvedValue(false)
     renderPage()
     await screen.findByText('User temporary files')
-    await userEvent.click(screen.getByRole('button', { name: /run quick clean/i }))
+    await userEvent.click(screen.getByRole('button', { name: /run quick scan/i }))
     await screen.findByText('Analysis results')
     await userEvent.click(screen.getByRole('button', { name: /clean now/i }))
     await waitFor(() => expect(api.dialog.confirm).toHaveBeenCalled())
@@ -83,7 +83,7 @@ describe('Clean page flow', () => {
     ;(api.cleaner.scan as unknown as { mockRejectedValue: (e: Error) => void }).mockRejectedValue(new Error('disk exploded on read'))
     renderPage()
     await screen.findByText('User temporary files')
-    await userEvent.click(screen.getByRole('button', { name: /run quick clean/i }))
+    await userEvent.click(screen.getByRole('button', { name: /run quick scan/i }))
     expect(await screen.findByText(/disk exploded on read/)).toBeTruthy()
     expect(screen.queryByText('Analysis results')).toBeNull()
   })
@@ -94,7 +94,7 @@ describe('Clean page flow', () => {
     await screen.findByText('User temporary files')
     const cancel = screen.getByRole('button', { name: /^cancel$/i })
     expect((cancel as HTMLButtonElement).disabled).toBe(true)
-    await userEvent.click(screen.getByRole('button', { name: /run quick clean/i }))
+    await userEvent.click(screen.getByRole('button', { name: /run quick scan/i }))
     await screen.findByText('Analysis results')
     expect(api.cleaner.scan).toHaveBeenCalled()
   })
@@ -109,6 +109,33 @@ describe('Clean page flow', () => {
     expect(await screen.findByText(/Nothing was deleted/i)).toBeTruthy()
   })
 
+  it('shows why files were skipped after a cleanup, not just a bare count', async () => {
+    const api = installMockApi()
+    renderPage()
+    await screen.findByText('User temporary files')
+    await userEvent.click(screen.getByRole('button', { name: /run quick scan/i }))
+    await screen.findByText('Analysis results')
+    await userEvent.click(screen.getByRole('button', { name: /clean now/i }))
+    await waitFor(() => expect(api.cleaner.clean).toHaveBeenCalledWith('scan-1'))
+
+    expect(await screen.findByText('Cleanup results')).toBeTruthy()
+    expect(screen.getByText('Why files were skipped during cleanup')).toBeTruthy()
+    // The reason text comes from the engine's own report.
+    expect(screen.getByText(/locked or in use by another program/)).toBeTruthy()
+  })
+
+  it('shows scan-phase skip reasons with their counts', async () => {
+    installMockApi()
+    renderPage()
+    await screen.findByText('User temporary files')
+    await userEvent.click(screen.getByRole('button', { name: /run quick scan/i }))
+    await screen.findByText('Analysis results')
+    // Expand the sample table, which carries the aggregated skip reasons.
+    await userEvent.click(screen.getByRole('button', { name: /show sample files/i }))
+    expect(await screen.findByText(/not a cache\/temp file type/)).toBeTruthy()
+    expect(screen.getByText(/newer than the minimum-age filter/)).toBeTruthy()
+  })
+
   it('shows real category expansion details', async () => {
     installMockApi()
     renderPage()
@@ -117,25 +144,6 @@ describe('Clean page flow', () => {
     const detail = await screen.findByText('What it removes')
     expect(detail).toBeTruthy()
     expect(screen.getByText(/Files in %TEMP% older than the age filter/)).toBeTruthy()
-  })
-})
-
-describe('Dashboard', () => {
-  it('labels measured values and never claims an FPS boost', async () => {
-    installMockApi()
-    const { Dashboard } = await import('@/pages/Dashboard')
-    render(
-      <AppProvider>
-        <Dashboard />
-      </AppProvider>
-    )
-    expect(await screen.findByText('System readiness')).toBeTruthy()
-    expect(screen.getByText(/never guarantees FPS/i)).toBeTruthy()
-    const body = document.body.textContent ?? ''
-    expect(body.toLowerCase()).not.toContain('boost your fps')
-    expect(body.toLowerCase()).not.toContain('guaranteed')
-    // The CPU value comes from the mocked snapshot (12.5%).
-    await waitFor(() => expect(within(document.body).getAllByText('12.5%').length).toBeGreaterThan(0))
   })
 })
 

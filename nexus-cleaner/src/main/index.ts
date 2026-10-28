@@ -2,20 +2,13 @@ import { app, BrowserWindow, shell, nativeTheme } from 'electron'
 import path from 'node:path'
 import { registerIpcHandlers } from './ipc/register'
 import { AppServices } from './services/appServices'
+import { resolveAppVersion } from './core/appVersion'
 
 const isDev = !app.isPackaged
 
-/**
- * `app.getVersion()` returns Electron's version when the app is launched from a
- * script rather than a packaged bundle (and before `app.setName`). Report the
- * package version we actually ship, and only trust getVersion() when it differs
- * from the Electron runtime version.
- */
-export const APP_VERSION = ((): string => {
-  const reported = app.getVersion()
-  if (!reported || reported === process.versions.electron) return '1.0.0'
-  return reported
-})()
+/** `app.getVersion()` reports the Electron version when launched from a script. */
+const APP_VERSION = resolveAppVersion(app.getVersion(), process.versions.electron)
+
 let mainWindow: BrowserWindow | null = null
 
 // Single instance: a second launch focuses the existing window instead of
@@ -90,7 +83,7 @@ app.whenReady().then(async () => {
   app.setAppUserModelId('com.nexus.cleaner')
   nativeTheme.themeSource = 'dark'
 
-  const services = new AppServices(app.getPath('userData'))
+  const services = new AppServices(app.getPath('userData'), APP_VERSION)
   await services.init()
 
   registerIpcHandlers(services, () => mainWindow)

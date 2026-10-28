@@ -288,80 +288,30 @@
   }
 }
 
-/* Continuous ambient animations (disabled by reduced-motion / animation off) */
-@keyframes nx-spin-slow {
-  to {
-    transform: rotate(360deg);
-  }
-}
-@keyframes nx-spin-reverse {
-  to {
-    transform: rotate(-360deg);
-  }
-}
-@keyframes nx-pulse-soft {
-  0%,
-  100% {
-    opacity: 0.45;
-  }
-  50% {
-    opacity: 0.95;
-  }
-}
-@keyframes nx-sweep {
-  0% {
-    transform: translateY(-110%);
-  }
-  100% {
-    transform: translateY(110%);
-  }
-}
-@keyframes nx-float {
-  0%,
-  100% {
-    transform: translate3d(0, 0, 0);
-  }
-  50% {
-    transform: translate3d(0, -6px, 0);
-  }
-}
-@keyframes nx-drift-up {
-  0% {
-    transform: translateY(0);
-    opacity: 0;
-  }
-  12% {
-    opacity: 0.9;
-  }
-  100% {
-    transform: translateY(-150px);
-    opacity: 0;
-  }
-}
-@keyframes nx-dash {
-  to {
-    stroke-dashoffset: -1000;
-  }
+/* Real, bounded transitions only — no ambient/idle animation.
+   Every remaining animation in the app is either a short state transition or a
+   progress indicator driven by an actual backend operation. */
+
+/* Scan action tiles: hover/focus/press feedback only (no idle motion). */
+.nx-scan-action:active:not(:disabled) {
+  transform: translateY(1px);
 }
 
-.nx-anim-spin-slow {
-  animation: nx-spin-slow 22s linear infinite;
+/* Users who ask their OS for reduced motion get none of it. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
+  }
 }
-.nx-anim-spin-reverse {
-  animation: nx-spin-reverse 34s linear infinite;
-}
-.nx-anim-pulse {
-  animation: nx-pulse-soft 3.4s ease-in-out infinite;
-}
-.nx-anim-sweep {
-  animation: nx-sweep 3.6s ease-in-out infinite;
-}
-.nx-anim-float {
-  animation: nx-float 6s ease-in-out infinite;
-}
-.nx-anim-dash {
-  animation: nx-dash 18s linear infinite;
-}
-.nx-anim-pause {
-  animation-play-state: paused;
+.nx-no-motion *,
+[data-motion='reduced'] * {
+  animation-duration: 0.001ms !important;
+  animation-iteration-count: 1 !important;
+  transition-duration: 0.001ms !important;
+  scroll-behavior: auto !important;
 }

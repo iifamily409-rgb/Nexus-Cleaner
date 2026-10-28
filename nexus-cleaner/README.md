@@ -94,7 +94,8 @@ src/
     index.ts         Window creation, CSP enforcement, navigation lockdown
 
   preload/index.ts   contextBridge surface — the only object the renderer sees
-  renderer/          React 19 + Tailwind 4 + Framer Motion UI (14 pages)
+  renderer/          React 19 + Tailwind 4 + Framer Motion UI
+                     (one home screen + 10 feature pages behind "All features")
 ```
 
 ### Security posture
@@ -159,7 +160,7 @@ limits what is possible) · **⛔ not implemented** (deliberately, with reason).
 | Diagnostic log artifacts | ✅ | Rotated logs only |
 | Configurable age filter | ✅ | Hours, 0–175 200, applied at scan *and* delete time |
 | Folder exclusions | ✅ | Persisted in settings, merged into every scan |
-| Quick / Smart / Deep / Custom modes | ✅ | Deep = broader analysis, same safety rules |
+| Quick / Smart / Full / Custom modes | ✅ | Full = broader analysis, same safety rules |
 | Dry-run preview | ✅ | Reports what *would* be attempted, deletes nothing |
 | Bounded concurrency | ✅ | 3 categories × 8 directory walkers × 12 deletions |
 | Dedupe of scan candidates | ✅ | Case-insensitive path set on Windows |
@@ -171,13 +172,14 @@ limits what is possible) · **⛔ not implemented** (deliberately, with reason).
 
 | Feature | Status | Notes |
 | --- | --- | --- |
-| Holographic scanner | ✅ | SVG; rings rotate only while an operation is running |
-| Progress arc | ✅ | Driven by real completed/total category counts |
-| Particles / scan beam | ✅ | Pure decoration, disabled by reduced-motion |
-| Live metrics strip | ✅ | CPU/RAM/disk/net from the monitor |
+| Home screen | ✅ | One screen: three scan buttons (Quick / Smart / Full) + compact live metrics |
+| All features drawer | ✅ | Clean / Analyze / Manage / App groups; every page keeps its own backend |
+| Progress indicator | ✅ | Category counts from real backend events; indeterminate when the workload is unknown |
+| No idle animation | ✅ | No spinners, particles or fake file activity before a real operation starts |
+| Live metrics | ✅ | CPU/RAM/disk/net from the monitor; a card is hidden when it has no real value |
 | Operation console | ✅ | Every line is a genuine engine event |
-| Expandable technical details | ✅ | Per-category roots, skip reasons, timings |
-| Reduced motion | ✅ | Settings toggle + `animationIntensity: off` |
+| Expandable technical details | ✅ | Per-category roots, skip reasons, timings (collapsed until a scan runs) |
+| Reduced motion | ✅ | Settings toggle + `animationIntensity: off` + `prefers-reduced-motion` |
 
 ### C. System optimizer
 
@@ -285,9 +287,9 @@ limits what is possible) · **⛔ not implemented** (deliberately, with reason).
 ## 4. Testing
 
 ```
-npm test              # 125 tests: node (unit + integration) and ui (jsdom)
-npm run test:node     # 117 tests
-npm run test:ui       # 8 tests
+npm test              # 155 tests: node (unit + integration) and ui (jsdom)
+npm run test:node     # 136 tests
+npm run test:ui       # 19 tests
 npm run typecheck     # strict TS, both projects
 ```
 
@@ -300,12 +302,13 @@ npm run typecheck     # strict TS, both projects
 | Startup risk | `tests/unit/startupRisk.test.ts` | security components flagged critical, concurrency clamps |
 | Walker | `tests/integration/cleaner.test.ts` | streaming, symlink skipping, cancellation, depth limits |
 | Engine | `tests/integration/cleaner.test.ts` | scan/deleted/skip semantics, age filter, exclusions, symlink swap, missing files, dry run, timings |
-| Skip reasons | `tests/integration/skipReasons.test.ts` | **every** skipped file has a counted reason |
-| Cancellation & locked files | `tests/integration/cancellation.test.ts` | cancel via scan id, partial reports stay consistent, un-unlinkable files skipped |
+| Skip reasons | `tests/integration/skipReasons.test.ts` | **every** skipped file has a counted reason in scan *and* cleanup, including symlinks, exclusions, age filter, vanished/changed files and locked files; `Σ reasons === skipped`; overlapping roots counted once |
+| Duplicate survivors | `tests/integration/dupSurvivor.test.ts` | last copy is never deleted when the keeper vanished; content-verified survivors; unverified paths refused |
 | Duplicates | `tests/integration/cleaner.test.ts` | real hashing, same-size-different-content, keep-last-copy refusal |
 | Storage | `tests/integration/cleaner.test.ts` | accurate sizes, category buckets, system-root refusal |
 | Persistence | `tests/integration/cleaner.test.ts` | atomic writes, corrupted-file fallback, history prune/clear |
-| UI flow | `tests/ui/cleanFlow.test.tsx` | scan → preview → confirm → results, declined confirmation does nothing, failures surface, dry run, real numbers rendered |
+| UI flow | `tests/ui/cleanFlow.test.tsx` | scan → preview → confirm → results, declined confirmation does nothing, failures surface, dry run, real numbers rendered, skip reasons shown after cleanup |
+| Navigation | `tests/ui/navigation.test.tsx` | three scan actions only, each starts its real mode, zero-eligible disables cleanup, All-Features drawer lists and opens every feature, back-home, no idle animation |
 
 **No test ever touches a real user folder.** Every integration test creates its
 own `mkdtemp` sandbox; the engine is given an injected recipe pointing only at
@@ -317,11 +320,15 @@ sandbox and by asserting that an "outside" file survives.
 Run under Xvfb against the production bundle (`out/`) with all operations
 pointed at `~/.cache/nexus-e2e`:
 
-- all 14 pages render, no empty pages, zero renderer console errors;
-- real scan → dry run (0 deleted) → real clean of 8 files = 312.5 KB actual,
-  320 KB measured disk-free delta, protected `.docx` and fresh file preserved;
+- the home screen plus all 10 "All features" destinations render, no empty
+  pages, zero renderer console errors;
+- real scan → review → confirmed clean of a `mktemp` scratch dir:
+  324 files queued → 323 removed (11.6 MB actual / 12.2 MB measured) + 1 skipped
+  with a stated reason; protected `.docx` preserved; `queued = removed + skipped`
+  reconciles exactly;
 - skip reasons surfaced: `99 × not a cache/temp file type`,
   `65 × newer than the minimum-age filter`, `6 × outside every allowlisted cleanup root`;
+- cleanup-time skip reasons surfaced (`1 × file disappeared before deletion`);
 - hostile payloads rejected: bad mode, `../../etc` exclusion, unknown category,
   `/` as a storage/duplicate root, invalid settings, unknown scan id;
 - renderer sandbox confirmed: `window.require`, `window.process`,
